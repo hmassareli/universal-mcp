@@ -19,16 +19,32 @@ A powerful MCP (Model Context Protocol) server that allows LLMs to see and inter
 ### Prerequisites
 
 1. **Python 3.10+** - [Download](https://www.python.org/downloads/)
-2. **Tesseract OCR** - [Download for Windows](https://github.com/UB-Mannheim/tesseract/wiki)
-   - During installation, note the install path (default: `C:\Program Files\Tesseract-OCR`)
-   - Add to PATH or configure in the MCP settings
+2. **Tesseract OCR** (optional, for text recognition) - [Download for Windows](https://github.com/UB-Mannheim/tesseract/wiki)
 
 ### Installation
+
+Run the automated setup script:
 
 ```powershell
 # Clone or download the project
 cd universal-mcp
 
+# Run setup (creates venv, installs dependencies, configures VS Code)
+.\setup.ps1
+```
+
+This will:
+- Create a virtual environment (`.venv`)
+- Install all dependencies
+- Check/install Tesseract OCR
+- Create VS Code configuration (`.vscode/mcp.json`)
+- Create default config (`mcp-desktop-config.json`)
+
+### Manual Installation (Alternative)
+
+If you prefer manual setup:
+
+```powershell
 # Create virtual environment
 python -m venv .venv
 .venv\Scripts\Activate.ps1
@@ -39,7 +55,20 @@ pip install -e .
 
 ### Configure VS Code
 
-Add to your VS Code `settings.json` or `.vscode/mcp.json`:
+The setup script creates `.vscode/mcp.json` automatically. If you did manual installation, create it manually:
+
+```json
+{
+  "servers": {
+    "desktop-visual": {
+      "command": "C:/path/to/universal-mcp/.venv/Scripts/python.exe",
+      "args": ["-m", "mcp_desktop_visual.server"]
+    }
+  }
+}
+```
+
+Or add to your global VS Code `settings.json`:
 
 ```json
 {
@@ -50,19 +79,6 @@ Add to your VS Code `settings.json` or `.vscode/mcp.json`:
         "args": ["-m", "mcp_desktop_visual.server"],
         "cwd": "C:/path/to/universal-mcp"
       }
-    }
-  }
-}
-```
-
-Or create a `.vscode/mcp.json` file:
-
-```json
-{
-  "servers": {
-    "desktop-visual": {
-      "command": "C:/path/to/universal-mcp/.venv/Scripts/python.exe",
-      "args": ["-m", "mcp_desktop_visual.server"]
     }
   }
 }
@@ -106,6 +122,7 @@ Or create a `.vscode/mcp.json` file:
 | `window_list`   | List all visible windows |
 | `window_find`   | Find window by title     |
 | `window_active` | Get active window info   |
+| `window_activate` | Activate window by title |
 
 ### Utility Tools
 
@@ -156,6 +173,22 @@ Or create a `.vscode/mcp.json` file:
 { "tool": "keyboard_hotkey", "keys": ["alt", "f4"] }
 ```
 
+### Example: Window Management
+
+```json
+// List all windows
+{ "tool": "window_list" }
+
+// Find a specific window
+{ "tool": "window_find", "title": "Chrome" }
+
+// Activate a window
+{ "tool": "window_activate", "title": "VS Code" }
+
+// Get active window info
+{ "tool": "window_active" }
+```
+
 ### Example: Query Screen State
 
 ```json
@@ -167,6 +200,24 @@ Or create a `.vscode/mcp.json` file:
 
 // Get incremental changes
 { "tool": "screen_capture" }
+```
+
+## 📁 Examples
+
+The `examples/` folder contains sample scripts demonstrating common use cases:
+
+- **`basic_usage.py`** - Basic screen capture and element detection
+- **`form_filling.py`** - Automated form filling with keyboard input
+- **`screen_monitoring.py`** - Continuous screen monitoring and change detection
+
+Run an example:
+
+```powershell
+# Activate virtual environment
+.venv\Scripts\Activate.ps1
+
+# Run basic usage example
+python examples/basic_usage.py
 ```
 
 ## ⚙️ Configuration
@@ -220,6 +271,25 @@ Create `mcp-desktop-config.json` in your project or home directory:
 5. **Return**: Send JSON diff to LLM (only what changed!)
 
 This approach typically reduces processing by 80-95% compared to full-screen analysis every time.
+
+## 🧪 Testing
+
+Run the test suite:
+
+```powershell
+# Activate virtual environment
+.venv\Scripts\Activate.ps1
+
+# Install dev dependencies
+pip install -e ".[dev]"
+
+# Run tests
+pytest
+
+# Or run specific test files
+python test_mcp.py
+python test_cdp.py
+```
 
 ## 🐛 Troubleshooting
 
