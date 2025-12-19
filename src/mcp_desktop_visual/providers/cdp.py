@@ -338,12 +338,11 @@ class CDPProvider(ElementProvider):
     
     def _get_elements_via_cdp(self) -> list[UIElement]:
         """
-        Query CDP for all interactive elements.
+        Query CDP for all interactive elements including browser tabs.
         
-        This is a simplified implementation. A full implementation would:
-        1. Connect via WebSocket to the debugging endpoint
-        2. Execute JavaScript to query the DOM
-        3. Get bounding boxes for each element
+        Gets:
+        1. All tabs (if Chrome is running with debug port)
+        2. Interactive elements in the current page
         """
         import urllib.request
         import json
@@ -353,18 +352,34 @@ class CDPProvider(ElementProvider):
         elements = []
         
         try:
-            # Get list of debuggable targets
+            # Get list of debuggable targets (tabs)
             url = f"http://localhost:{self.default_port}/json"
-            with urllib.request.urlopen(url, timeout=2) as response:
-                targets = json.loads(response.read().decode())
+            response_data = urllib.request.urlopen(url, timeout=2).read()
+            
+            # Remove BOM if present (UTF-8 with BOM)
+            if response_data.startswith(b'\xef\xbb\xbf'):
+                response_data = response_data[3:]
+            
+            text = response_data.decode('utf-8', errors='replace')
+            try:
+                targets = json.loads(text)
+            except json.JSONDecodeError as e:
+                logger.warning(f"CDP: json.loads failed: {e}; attempting raw_decode")
+                try:
+                    decoder = json.JSONDecoder()
+                    obj, idx = decoder.raw_decode(text)
+                    targets = obj
+                except Exception as e2:
+                    logger.warning(f"CDP: raw_decode also failed: {e2}; response sample: {text[:1000]}")
+                    targets = []
             
             if not targets:
                 logger.debug("CDP: No targets found")
                 return elements
             
-            # For now, we'll use a simpler HTTP-based approach
-            # to execute JavaScript and get elements
-            # Full implementation would use WebSocket for real-time communication
+            # Get tabs/pages (browser tabs)
+            tab_elements = self._get_tab_elements(targets)
+            elements.extend(tab_elements)
             
             # Get the first page target
             page_target = None
@@ -375,14 +390,62 @@ class CDPProvider(ElementProvider):
             
             if page_target:
                 # Connect via WebSocket and query DOM
-                elements = self._query_dom_elements(page_target)
-                logger.debug(f"CDP: Found {len(elements)} elements")
+                dom_elements = self._query_dom_elements(page_target)
+                elements.extend(dom_elements)
+                logger.debug(f"CDP: Found {len(tab_elements)} tabs, {len(dom_elements)} page elements")
             else:
                 logger.debug("CDP: No page target found")
         
         except Exception as e:
             # CDP not available or error
             logger.warning(f"CDP error: {e}")
+        
+        return elements
+    
+    def _get_tab_elements(self, targets: list) -> list[UIElement]:
+        """
+        Extract tab elements from CDP targets.
+        
+        Creates virtual tab elements that can be clicked to switch tabs.
+        """
+        elements = []
+        x_offset = 100
+        tab_width = 200
+        tab_height = 30
+        y_pos = 20  # Near top of browser
+        
+        for i, target in enumerate(targets):
+            if target.get("type") == "page":
+                # Extract tab title from URL and title
+                url = target.get("url", "")
+                title = target.get("title", "")
+                
+                # Use title if available, otherwise extract from URL
+                tab_label = title[:30] if title else url.split("/")[-1][:30]
+                
+                # Create tab element with clickable bounds
+                bounds = BoundingBox(
+                    x=x_offset + (i * tab_width),
+                    y=y_pos,
+                    width=tab_width,
+                    height=tab_height
+                )
+                
+                elements.append(UIElement.create(
+                    type=ElementType.TAB,
+                    bounds=bounds,
+                    text=tab_label,
+                    label=tab_label,
+                    is_enabled=True,
+                    is_visible=True,
+                    confidence=1.0,
+                    metadata={
+                        "source": "cdp",
+                        "target_id": target.get("id"),
+                        "url": url,
+                        "is_active": target.get("attached", False)
+                    }
+                ))
         
         return elements
     
@@ -503,4 +566,154 @@ class CDPProvider(ElementProvider):
             import logging
             logging.getLogger(__name__).warning(f"CDP query_dom error: {e}")
         
-        return elements
+        return elements    
+    def start_chrome_with_debug(self) -> bool:
+        """
+        Start Chrome with debugging port enabled.
+        
+        Kills any existing Chrome instances and starts a fresh one with
+        --remote-debugging-port=9222 and profile synced from user's default profile.
+        
+        Returns:
+            True if Chrome started successfully, False otherwise
+        """
+        import logging
+        
+        logger = logging.getLogger(__name__)
+        
+        try:
+            logger.info("CDP: Starting Chrome with debug port...")
+            
+            # Use the batch script if available (it handles profile sync)
+            script_path = self._find_start_script()
+            
+            if script_path:
+                logger.info(f"CDP: Using start script: {script_path}")
+                subprocess.run(
+                    [script_path],
+                    capture_output=True,
+                    text=True,
+                    shell=True
+                )
+            else:
+                logger.info("CDP: No start script found, starting Chrome manually")
+                
+                # Kill existing Chrome
+                subprocess.run(
+                    ["taskkill", "/F", "/IM", "chrome.exe", "/T"],
+                    capture_output=True,
+                    text=True
+                )
+                time.sleep(2)
+                
+                # Sync profile
+                self._sync_user_profile()
+                
+                # Get Chrome path
+                chrome_path = self._get_chrome_path()
+                if not chrome_path:
+                    logger.error("CDP: Chrome not found")
+                    return False
+                
+                # Start Chrome
+                subprocess.Popen([
+                    chrome_path,
+                    f"--remote-debugging-port={self.default_port}",
+                    f"--user-data-dir={self._debug_profile_dir}",
+                    "--remote-allow-origins=*",
+                    "https://google.com"
+                ])
+            
+            # Wait for port to open
+            logger.info("CDP: Waiting for debug port to open...")
+            for i in range(15):
+                if self._check_debug_port(self.default_port):
+                    logger.info(f"CDP: Debug port opened after {i+1} attempts")
+                    return True
+                time.sleep(1)
+            
+            logger.error("CDP: Debug port never opened")
+            return False
+            
+        except Exception as e:
+            logger.error(f"CDP: Failed to start Chrome: {e}")
+            return False
+    
+    def switch_tab(self, tab_id: str) -> bool:
+        """
+        Switch to a specific tab by CDP target ID.
+        
+        Args:
+            tab_id: The target ID of the tab to activate
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        import urllib.request
+        import json
+        import logging
+        
+        logger = logging.getLogger(__name__)
+        
+        try:
+            # Use Target.activateTarget command to switch tabs
+            url = f"http://localhost:{self.default_port}/json/activate/{tab_id}"
+            urllib.request.urlopen(url, timeout=2)
+            
+            logger.info(f"CDP: Switched to tab {tab_id}")
+            return True
+            
+        except Exception as e:
+            logger.warning(f"CDP: Failed to switch tab: {e}")
+            return False
+    
+    def get_tabs(self) -> list[dict]:
+        """
+        Get list of all open tabs in Chrome.
+        
+        Returns:
+            List of tab information dicts with: id, title, url, active
+        """
+        import urllib.request
+        import json
+        import logging
+        
+        logger = logging.getLogger(__name__)
+        tabs = []
+        
+        try:
+            url = f"http://localhost:{self.default_port}/json"
+            response_data = urllib.request.urlopen(url, timeout=2).read()
+            
+            # Remove BOM if present (UTF-8 with BOM)
+            if response_data.startswith(b'\xef\xbb\xbf'):
+                response_data = response_data[3:]
+            
+            text = response_data.decode('utf-8', errors='replace')
+            try:
+                targets = json.loads(text)
+            except json.JSONDecodeError as e:
+                logger.warning(f"CDP: json.loads failed in get_tabs: {e}; attempting raw_decode")
+                try:
+                    decoder = json.JSONDecoder()
+                    obj, idx = decoder.raw_decode(text)
+                    targets = obj
+                except Exception as e2:
+                    logger.warning(f"CDP: raw_decode also failed in get_tabs: {e2}; response sample: {text[:1000]}")
+                    targets = []
+            
+            for target in targets:
+                if target.get("type") == "page":
+                    tabs.append({
+                        "id": target.get("id"),
+                        "title": target.get("title", ""),
+                        "url": target.get("url", ""),
+                        "active": target.get("attached", False)
+                    })
+            
+            logger.debug(f"CDP: Found {len(tabs)} tabs")
+            
+        except Exception as e:
+            logger.warning(f"CDP: Failed to get tabs: {e}")
+        
+        return tabs

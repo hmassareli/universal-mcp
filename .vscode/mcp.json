@@ -1,8 +1,11 @@
-{
-  "servers": {
-    "desktop-visual": {
-      "command": "${workspaceFolder}/run-mcp.cmd",
-      "args": []
-    }
-  }
+﻿{
+    "servers":  {
+                    "desktop-visual":  {
+                                           "args":  [
+                                                        "-m",
+                                                        "mcp_desktop_visual.server"
+                                                    ],
+                                           "command":  "C:/Users/USER/studies/universal-mcp/.venv/Scripts/python.exe"
+                                       }
+                }
 }

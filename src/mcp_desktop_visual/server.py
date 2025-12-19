@@ -1,4 +1,4 @@
-"""
+﻿"""
 MCP Desktop Visual Server
 
 Main MCP server implementation that exposes desktop visual tools.
@@ -677,6 +677,48 @@ Useful after clicking a button to wait for the result.""",
             "properties": {},
         },
     ),
+    
+    # Browser Tab Tools
+    Tool(
+        name="chrome_start",
+        description="""Start Chrome with debug port (--remote-debugging-port=9222).
+        
+This must be run first before using chrome_get_tabs or chrome_switch_tab.
+Automatically kills existing Chrome instances and starts a fresh one with
+proper profile syncing (cookies, passwords, etc.).""",
+        inputSchema={
+            "type": "object",
+            "properties": {},
+        },
+    ),
+    Tool(
+        name="chrome_get_tabs",
+        description="""Get list of all open tabs in Chrome.
+        
+Requires Chrome to be running with --remote-debugging-port=9222.
+Use chrome_start first to open Chrome correctly.
+Returns list of tabs with their id, title, url, and active status.""",
+        inputSchema={
+            "type": "object",
+            "properties": {},
+        },
+    ),
+    Tool(
+        name="chrome_switch_tab",
+        description="""Switch to a specific Chrome tab by its ID.
+        
+Use chrome_get_tabs first to get the list of available tabs and their IDs.""",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "tab_id": {
+                    "type": "string",
+                    "description": "The tab ID to switch to (from chrome_get_tabs)",
+                },
+            },
+            "required": ["tab_id"],
+        },
+    ),
 ]
 
 
@@ -1006,6 +1048,40 @@ async def _handle_tool(
     
     elif name == "engine_stats":
         return engine.get_stats()
+    
+    elif name == "chrome_start":
+        # Get the CDP provider from the engine
+        cdp_provider = engine.registry.get_provider_for_process("chrome.exe", "", "")
+        if cdp_provider:
+            success = cdp_provider.start_chrome_with_debug()
+            if success:
+                return {"success": True, "message": "Chrome started with debug port 9222"}
+            else:
+                return {"success": False, "error": "Failed to start Chrome"}
+        else:
+            return {"success": False, "error": "CDP provider not available"}
+    
+    elif name == "chrome_get_tabs":
+        # Get the CDP provider from the engine
+        cdp_provider = engine.registry.get_provider_for_process("chrome.exe", "", "")
+        if cdp_provider:
+            tabs = cdp_provider.get_tabs()
+            return {"success": True, "tabs": tabs, "count": len(tabs)}
+        else:
+            return {"success": False, "error": "CDP provider not available or Chrome not running"}
+    
+    elif name == "chrome_switch_tab":
+        tab_id = args.get("tab_id")
+        if not tab_id:
+            return {"success": False, "error": "tab_id is required"}
+        
+        # Get the CDP provider from the engine
+        cdp_provider = engine.registry.get_provider_for_process("chrome.exe", "", "")
+        if cdp_provider:
+            success = cdp_provider.switch_tab(tab_id)
+            return {"success": success, "tab_id": tab_id}
+        else:
+            return {"success": False, "error": "CDP provider not available or Chrome not running"}
     
     else:
         return {"error": f"Unknown tool: {name}"}

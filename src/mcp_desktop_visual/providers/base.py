@@ -143,4 +143,25 @@ class ElementProvider(ABC):
             
             return best_match
         
-        return None
+        return None    
+    def get_tabs(self) -> list[dict]:
+        """
+        Get list of open tabs (if supported by provider).
+        
+        Returns:
+            List of tab dicts with: id, title, url, active
+            Empty list if not supported.
+        """
+        return []
+    
+    def switch_tab(self, tab_id: str) -> bool:
+        """
+        Switch to a specific tab (if supported by provider).
+        
+        Args:
+            tab_id: The tab ID to activate
+            
+        Returns:
+            True if successful, False if not supported or failed
+        """
+        return False
