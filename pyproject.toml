@@ -1,0 +1,63 @@
+[project]
+name = "mcp-desktop-visual"
+version = "1.0.0"
+description = "MCP Desktop Visual - Control and understand your Windows desktop through MCP"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "MCP Desktop Visual Team" }
+]
+keywords = ["mcp", "desktop", "automation", "visual", "ocr", "windows"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+dependencies = [
+    "mcp>=1.0.0",
+    "mss>=9.0.0",
+    "opencv-python>=4.8.0",
+    "numpy>=1.24.0",
+    "pytesseract>=0.3.10",
+    "pyautogui>=0.9.54",
+    "pynput>=1.7.6",
+    "Pillow>=10.0.0",
+    "pydantic>=2.0.0",
+    "rapidfuzz>=3.0.0",
+    "pywin32>=306",
+    "websocket-client>=1.6.0",    # For CDP WebSocket connections
+    "uiautomation>=2.0.0",         # For Windows UI Automation
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+]
+
+[project.scripts]
+mcp-desktop = "mcp_desktop_visual.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mcp_desktop_visual"]
+
+[tool.black]
+line-length = 100
+target-version = ["py310", "py311", "py312"]
+
+[tool.ruff]
+line-length = 100
+select = ["E", "F", "W", "I", "N", "UP", "B", "C4"]
+ignore = ["E501"]

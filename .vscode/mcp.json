@@ -1,0 +1,8 @@
+{
+  "servers": {
+    "desktop-visual": {
+      "command": "${workspaceFolder}/run-mcp.cmd",
+      "args": []
+    }
+  }
+}

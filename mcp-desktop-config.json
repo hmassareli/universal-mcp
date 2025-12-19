@@ -1,0 +1,46 @@
+{
+  "capture": {
+    "monitor": null,
+    "capture_interval": 0.5,
+    "diff_threshold": 30,
+    "min_region_area": 100,
+    "max_regions": 50,
+    "diff_scale": 0.5
+  },
+  "ocr": {
+    "tesseract_path": null,
+    "language": "eng",
+    "psm": 6,
+    "confidence_threshold": 60,
+    "preprocessing": true
+  },
+  "element_detection": {
+    "detect_buttons": true,
+    "detect_inputs": true,
+    "detect_checkboxes": true,
+    "detect_icons": true,
+    "min_element_size": [10, 10],
+    "max_element_size": [2000, 1000],
+    "edge_sensitivity": 50
+  },
+  "input": {
+    "click_delay": 0.1,
+    "typing_delay": 0.02,
+    "move_duration": 0.2,
+    "failsafe": true,
+    "pause_after_action": 0.1
+  },
+  "cache": {
+    "max_elements": 1000,
+    "max_history": 10,
+    "position_tolerance": 5,
+    "group_by_window": true
+  },
+  "server": {
+    "name": "desktop-visual",
+    "version": "1.0.0",
+    "debug": false,
+    "log_file": null,
+    "max_concurrent": 5
+  }
+}
