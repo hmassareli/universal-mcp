@@ -151,3 +151,4 @@ Thumbs.db
 *.log
 *.tmp
 screenshots/
+dev-mode-removeme/
