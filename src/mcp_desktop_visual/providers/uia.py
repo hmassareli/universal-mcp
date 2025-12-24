@@ -11,7 +11,7 @@ This works for most traditional Windows apps:
 - UWP applications
 
 Does NOT work well for:
-- Chromium-based apps (use CDP instead)
+- Chromium-based apps (usually requires OCR fallback or browser-side integration)
 - Games
 - Custom rendering engines
 """
@@ -50,7 +50,7 @@ class UIAProvider(ElementProvider):
     
     @property
     def priority(self) -> int:
-        return 80  # Second priority after CDP
+        return 80
     
     def can_handle(self, process_name: str, window_title: str, window_class: str) -> bool:
         """

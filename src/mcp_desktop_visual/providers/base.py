@@ -45,7 +45,6 @@ class ElementProvider(ABC):
     Abstract base class for UI element detection providers.
     
     Each provider implements a different strategy for detecting UI elements:
-    - CDP: Uses Chrome DevTools Protocol
     - UIA: Uses Windows UI Automation
     - OCR: Uses Tesseract OCR on screen images
     """
@@ -62,7 +61,6 @@ class ElementProvider(ABC):
         """
         Priority for provider selection (higher = preferred).
         
-        - CDP: 100 (best for Chromium apps)
         - UIA: 80 (good for native Windows apps)
         - OCR: 10 (fallback)
         """

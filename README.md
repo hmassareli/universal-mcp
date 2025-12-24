@@ -288,7 +288,8 @@ pytest
 
 # Or run specific test files
 python test_mcp.py
-python test_cdp.py
+
+\> Nota: a integração via Chrome DevTools Protocol (CDP) foi removida. Para automação dentro do navegador, use a extensão em `browser_extension/`.
 ```
 
 ## 🐛 Troubleshooting

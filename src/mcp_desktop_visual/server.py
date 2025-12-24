@@ -20,6 +20,8 @@ from mcp.types import (
 
 from .engine import DesktopVisualEngine, get_engine, start_engine
 from .models import ElementType, UIElement, ScreenState, VisualDiff
+from .config import get_config
+from .browser_bridge import BrowserBridge
 
 
 # Configure logging
@@ -79,6 +81,20 @@ Você tem acesso a ferramentas para ver e interagir com a tela do computador do 
 4. `wait_for_change(timeout=3)` - Aguarda abrir
 5. `keyboard_type(text="google.com")` - Digita URL
 6. `keyboard_press(key="enter")` - Navega
+
+## Automação Dentro do Navegador (Extensão)
+- Para automação DOM usando a sessão real do usuário no Chrome/Edge, use:
+    - `browser_status` para ver se a extensão conectou
+    - Se você estiver trabalhando dentro do navegador e a extensão estiver conectada, prefira `browser_screen_state` ao invés de `screen_capture`.
+    - `browser_get_state` para ler {title,url}
+    - `browser_navigate(url=...)` para navegar
+    - `browser_click(selector=...)` para clicar via CSS selector
+    - `browser_type(selector=..., text=..., clear=true|false)` para preencher campos
+    - `browser_query(selector=...)` para extrair texto/value/rect
+    - `browser_screen_state(limit=...)` para listar textos/botões/campos visíveis no DOM (com selectors)
+    - `browser_capture(force_full=false)` para obter um diff no DOM (similar ao `screen_capture`)
+
+Dica: prefira selectors estáveis como `input[name=email]`, `[data-testid=...]`.
 """
 
 
@@ -87,6 +103,76 @@ app = Server("desktop-visual")
 
 # Global engine instance
 _engine: Optional[DesktopVisualEngine] = None
+_browser_bridge: Optional[BrowserBridge] = None
+_browser_last_dom_state: Optional[dict] = None
+
+
+async def get_or_start_browser_bridge() -> BrowserBridge:
+    """Get or start the local browser extension WebSocket bridge."""
+    global _browser_bridge
+    if _browser_bridge is None:
+        cfg = get_config().server
+        _browser_bridge = BrowserBridge(host=cfg.browser_ws_host, port=cfg.browser_ws_port)
+        await _browser_bridge.start()
+        logger.info("Browser bridge listening on ws://%s:%s", cfg.browser_ws_host, cfg.browser_ws_port)
+    return _browser_bridge
+
+
+def _limit_list(items: list, limit: int) -> list:
+    """Optionally limit a list.
+
+    If limit is <= 0, returns the full list.
+    """
+    limit = int(limit)
+    if limit <= 0:
+        return items
+    return items[:limit]
+
+
+def _index_dom_state(state: dict) -> dict:
+    """Normalize extension screen_state result into indexed structures."""
+    url = state.get("url")
+    title = state.get("title")
+
+    buttons = state.get("buttons") or []
+    inputs = state.get("inputs") or []
+    texts = state.get("texts") or []
+
+    buttons_by_selector: dict[str, dict] = {}
+    for b in buttons:
+        sel = (b or {}).get("selector")
+        if isinstance(sel, str) and sel:
+            buttons_by_selector[sel] = {"label": (b or {}).get("label") or "", "selector": sel}
+
+    inputs_by_selector: dict[str, dict] = {}
+    for i in inputs:
+        sel = (i or {}).get("selector")
+        if isinstance(sel, str) and sel:
+            inputs_by_selector[sel] = {
+                "label": (i or {}).get("label") or "",
+                "selector": sel,
+                "type": (i or {}).get("type") or "",
+            }
+
+    text_set: set[str] = set()
+    for t in texts:
+        if isinstance(t, str):
+            s = t.strip()
+            if s:
+                text_set.add(s)
+
+    return {
+        "url": url,
+        "title": title,
+        "buttons_by_selector": buttons_by_selector,
+        "inputs_by_selector": inputs_by_selector,
+        "texts": text_set,
+        "counts": {
+            "buttons": len(buttons_by_selector),
+            "inputs": len(inputs_by_selector),
+            "texts": len(text_set),
+        },
+    }
 
 
 def get_or_start_engine() -> DesktopVisualEngine:
@@ -677,46 +763,180 @@ Useful after clicking a button to wait for the result.""",
             "properties": {},
         },
     ),
-    
-    # Browser Tab Tools
+
+    # Browser Utility (no CDP)
     Tool(
-        name="chrome_start",
-        description="""Start Chrome with debug port (--remote-debugging-port=9222).
-        
-This must be run first before using chrome_get_tabs or chrome_switch_tab.
-Automatically kills existing Chrome instances and starts a fresh one with
-proper profile syncing (cookies, passwords, etc.).""",
-        inputSchema={
-            "type": "object",
-            "properties": {},
-        },
-    ),
-    Tool(
-        name="chrome_get_tabs",
-        description="""Get list of all open tabs in Chrome.
-        
-Requires Chrome to be running with --remote-debugging-port=9222.
-Use chrome_start first to open Chrome correctly.
-Returns list of tabs with their id, title, url, and active status.""",
-        inputSchema={
-            "type": "object",
-            "properties": {},
-        },
-    ),
-    Tool(
-        name="chrome_switch_tab",
-        description="""Switch to a specific Chrome tab by its ID.
-        
-Use chrome_get_tabs first to get the list of available tabs and their IDs.""",
+        name="chrome_open",
+        description="""Open Google Chrome if it is not already running.
+
+This server does not control Chrome via debug ports/CDP. This tool is only a convenience
+to launch Chrome when needed.""",
         inputSchema={
             "type": "object",
             "properties": {
-                "tab_id": {
+                "url": {
                     "type": "string",
-                    "description": "The tab ID to switch to (from chrome_get_tabs)",
-                },
+                    "description": "Optional URL to open in Chrome",
+                }
             },
-            "required": ["tab_id"],
+        },
+    ),
+
+    # Browser Extension Tools (WebSocket bridge)
+    Tool(
+        name="browser_status",
+        description="Get status of the local browser extension bridge (connected clients, port, etc.).",
+        inputSchema={
+            "type": "object",
+            "properties": {},
+        },
+    ),
+    Tool(
+        name="browser_command",
+        description="""Send a command to the browser extension (active tab).
+
+Methods: get_state, navigate, click, type, query
+Params depend on method (e.g. click/type/query use {selector: "..."}).""",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "method": {"type": "string"},
+                "params": {"type": "object"},
+                "timeout": {"type": "number", "default": 10.0},
+            },
+            "required": ["method"],
+        },
+    ),
+
+    # Browser Extension Convenience Tools (preferred)
+    Tool(
+        name="browser_get_state",
+        description="Get basic state from the active tab (title, url, readyState).",
+        inputSchema={
+            "type": "object",
+            "properties": {"timeout": {"type": "number", "default": 10.0}},
+        },
+    ),
+
+    Tool(
+        name="browser_list_tabs",
+        description="List open browser tabs (requires the unpacked extension bridge).",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "currentWindow": {
+                    "type": "boolean",
+                    "default": True,
+                    "description": "If true, only list tabs in the current window",
+                },
+                "timeout": {"type": "number", "default": 10.0},
+            },
+        },
+    ),
+
+    Tool(
+        name="browser_activate_tab",
+        description="Activate a browser tab by tabId (switch tabs).",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "tabId": {"type": "number", "description": "Target tab id"},
+                "timeout": {"type": "number", "default": 10.0},
+            },
+            "required": ["tabId"],
+        },
+    ),
+    Tool(
+        name="browser_navigate",
+        description="Navigate the active tab to a URL.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "Destination URL"},
+                "timeout": {"type": "number", "default": 10.0},
+            },
+            "required": ["url"],
+        },
+    ),
+    Tool(
+        name="browser_click",
+        description="Click an element in the active tab using a CSS selector.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "selector": {"type": "string", "description": "CSS selector"},
+                "timeout": {"type": "number", "default": 10.0},
+            },
+            "required": ["selector"],
+        },
+    ),
+    Tool(
+        name="browser_type",
+        description="Type into an element in the active tab using a CSS selector.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "selector": {"type": "string", "description": "CSS selector"},
+                "text": {"type": "string", "description": "Text to type"},
+                "clear": {"type": "boolean", "default": False, "description": "Clear existing value first"},
+                "timeout": {"type": "number", "default": 10.0},
+            },
+            "required": ["selector", "text"],
+        },
+    ),
+    Tool(
+        name="browser_query",
+        description="Query an element in the active tab using a CSS selector (text/value/rect).",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "selector": {"type": "string", "description": "CSS selector"},
+                "timeout": {"type": "number", "default": 10.0},
+            },
+            "required": ["selector"],
+        },
+    ),
+
+    Tool(
+        name="browser_screen_state",
+        description="""Get a DOM-based 'screen state' for the active tab.
+
+Returns visible texts, buttons and inputs with CSS selectors. Prefer this over screen_capture when working in a browser.""",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "limit": {"type": "number", "default": 200, "description": "Max items per category"},
+                "include_texts": {"type": "boolean", "default": False, "description": "Include visible text snippets"},
+                "include_buttons": {"type": "boolean", "default": True, "description": "Include clickable elements"},
+                "include_inputs": {"type": "boolean", "default": True, "description": "Include inputs/selects/textareas"},
+                "max_text_length": {"type": "number", "default": 200, "description": "Max characters per text snippet"},
+                "include_hierarchy": {"type": "boolean", "default": True, "description": "Include basic ancestor breadcrumbs"},
+                "hierarchy_depth": {"type": "number", "default": 3, "description": "Max ancestors in breadcrumbs"},
+                "timeout": {"type": "number", "default": 10.0},
+            },
+        },
+    ),
+
+    Tool(
+        name="browser_capture",
+        description="""Capture browser DOM state and return a diff since the last browser_capture.
+
+This is analogous to screen_capture, but for the active browser tab (DOM via extension).
+Resets automatically if the URL changes, or if force_full=true.""",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "force_full": {"type": "boolean", "default": False},
+                "diff_limit": {"type": "number", "default": 200, "description": "Max added/removed items returned (0 = unlimited)"},
+                "limit": {"type": "number", "default": 200, "description": "Max items per category in the underlying snapshot"},
+                "include_texts": {"type": "boolean", "default": False},
+                "include_buttons": {"type": "boolean", "default": True},
+                "include_inputs": {"type": "boolean", "default": True},
+                "max_text_length": {"type": "number", "default": 200},
+                "include_hierarchy": {"type": "boolean", "default": True},
+                "hierarchy_depth": {"type": "number", "default": 3},
+                "timeout": {"type": "number", "default": 10.0},
+            },
         },
     ),
 ]
@@ -1048,40 +1268,177 @@ async def _handle_tool(
     
     elif name == "engine_stats":
         return engine.get_stats()
-    
-    elif name == "chrome_start":
-        # Get the CDP provider from the engine
-        cdp_provider = engine.registry.get_provider_for_process("chrome.exe", "", "")
-        if cdp_provider:
-            success = cdp_provider.start_chrome_with_debug()
-            if success:
-                return {"success": True, "message": "Chrome started with debug port 9222"}
-            else:
-                return {"success": False, "error": "Failed to start Chrome"}
-        else:
-            return {"success": False, "error": "CDP provider not available"}
-    
-    elif name == "chrome_get_tabs":
-        # Get the CDP provider from the engine
-        cdp_provider = engine.registry.get_provider_for_process("chrome.exe", "", "")
-        if cdp_provider:
-            tabs = cdp_provider.get_tabs()
-            return {"success": True, "tabs": tabs, "count": len(tabs)}
-        else:
-            return {"success": False, "error": "CDP provider not available or Chrome not running"}
-    
-    elif name == "chrome_switch_tab":
-        tab_id = args.get("tab_id")
-        if not tab_id:
-            return {"success": False, "error": "tab_id is required"}
-        
-        # Get the CDP provider from the engine
-        cdp_provider = engine.registry.get_provider_for_process("chrome.exe", "", "")
-        if cdp_provider:
-            success = cdp_provider.switch_tab(tab_id)
-            return {"success": success, "tab_id": tab_id}
-        else:
-            return {"success": False, "error": "CDP provider not available or Chrome not running"}
+
+    elif name == "chrome_open":
+        from .chrome import ensure_chrome_open
+
+        result = ensure_chrome_open(url=args.get("url"))
+        return {
+            "already_running": result.already_running,
+            "started": result.started,
+            "used_path": result.used_path,
+            "error": result.error,
+        }
+
+    elif name == "browser_status":
+        bridge = await get_or_start_browser_bridge()
+        return bridge.status()
+
+    elif name == "browser_command":
+        bridge = await get_or_start_browser_bridge()
+        method = args.get("method")
+        params = args.get("params")
+        timeout = float(args.get("timeout", 10.0))
+        return await bridge.command(method=method, params=params, timeout=timeout)
+
+    elif name == "browser_get_state":
+        bridge = await get_or_start_browser_bridge()
+        timeout = float(args.get("timeout", 10.0))
+        return await bridge.command(method="get_state", params={}, timeout=timeout)
+
+    elif name == "browser_list_tabs":
+        bridge = await get_or_start_browser_bridge()
+        timeout = float(args.get("timeout", 10.0))
+        params = {"currentWindow": bool(args.get("currentWindow", True))}
+        return await bridge.command(method="list_tabs", params=params, timeout=timeout)
+
+    elif name == "browser_activate_tab":
+        bridge = await get_or_start_browser_bridge()
+        timeout = float(args.get("timeout", 10.0))
+        params = {"tabId": args.get("tabId")}
+        return await bridge.command(method="activate_tab", params=params, timeout=timeout)
+
+    elif name == "browser_navigate":
+        bridge = await get_or_start_browser_bridge()
+        timeout = float(args.get("timeout", 10.0))
+        return await bridge.command(method="navigate", params={"url": args.get("url")}, timeout=timeout)
+
+    elif name == "browser_click":
+        bridge = await get_or_start_browser_bridge()
+        timeout = float(args.get("timeout", 10.0))
+        return await bridge.command(method="click", params={"selector": args.get("selector")}, timeout=timeout)
+
+    elif name == "browser_type":
+        bridge = await get_or_start_browser_bridge()
+        timeout = float(args.get("timeout", 10.0))
+        return await bridge.command(
+            method="type",
+            params={
+                "selector": args.get("selector"),
+                "text": args.get("text"),
+                "clear": bool(args.get("clear", False)),
+            },
+            timeout=timeout,
+        )
+
+    elif name == "browser_query":
+        bridge = await get_or_start_browser_bridge()
+        timeout = float(args.get("timeout", 10.0))
+        return await bridge.command(method="query", params={"selector": args.get("selector")}, timeout=timeout)
+
+    elif name == "browser_screen_state":
+        bridge = await get_or_start_browser_bridge()
+        timeout = float(args.get("timeout", 10.0))
+        params = {
+            "limit": args.get("limit", 200),
+            "include_texts": bool(args.get("include_texts", False)),
+            "include_buttons": bool(args.get("include_buttons", True)),
+            "include_inputs": bool(args.get("include_inputs", True)),
+            "max_text_length": args.get("max_text_length", 200),
+            "include_hierarchy": bool(args.get("include_hierarchy", True)),
+            "hierarchy_depth": args.get("hierarchy_depth", 3),
+        }
+        return await bridge.command(method="screen_state", params=params, timeout=timeout)
+
+    elif name == "browser_capture":
+        global _browser_last_dom_state
+
+        bridge = await get_or_start_browser_bridge()
+        timeout = float(args.get("timeout", 10.0))
+        force_full = bool(args.get("force_full", False))
+        diff_limit = int(args.get("diff_limit", 200))
+
+        params = {
+            "limit": args.get("limit", 200),
+            "include_texts": bool(args.get("include_texts", False)),
+            "include_buttons": bool(args.get("include_buttons", True)),
+            "include_inputs": bool(args.get("include_inputs", True)),
+            "max_text_length": args.get("max_text_length", 200),
+            "include_hierarchy": bool(args.get("include_hierarchy", True)),
+            "hierarchy_depth": args.get("hierarchy_depth", 3),
+        }
+
+        current = await bridge.command(method="screen_state", params=params, timeout=timeout)
+        if not current.get("ok"):
+            return current
+
+        current_state = current.get("result") or {}
+        cur_idx = _index_dom_state(current_state)
+
+        url_changed = False
+        if _browser_last_dom_state is not None:
+            prev_url = _browser_last_dom_state.get("url")
+            if prev_url and cur_idx.get("url") and prev_url != cur_idx.get("url"):
+                url_changed = True
+
+        if force_full or _browser_last_dom_state is None or url_changed:
+            _browser_last_dom_state = cur_idx
+            return {
+                "mudou": True,
+                "force_full": force_full,
+                "mudou_url": url_changed,
+                "url": cur_idx.get("url"),
+                "title": cur_idx.get("title"),
+                "counts": cur_idx.get("counts"),
+                "snapshot": {
+                    "buttons": list(cur_idx["buttons_by_selector"].values()),
+                    "inputs": list(cur_idx["inputs_by_selector"].values()),
+                    "texts": sorted(list(cur_idx["texts"])),
+                },
+            }
+
+        prev = _browser_last_dom_state
+        prev_buttons = prev.get("buttons_by_selector", {})
+        prev_inputs = prev.get("inputs_by_selector", {})
+        prev_texts: set[str] = prev.get("texts", set())
+
+        cur_buttons = cur_idx.get("buttons_by_selector", {})
+        cur_inputs = cur_idx.get("inputs_by_selector", {})
+        cur_texts: set[str] = cur_idx.get("texts", set())
+
+        added_button_selectors = [s for s in cur_buttons.keys() if s not in prev_buttons]
+        removed_button_selectors = [s for s in prev_buttons.keys() if s not in cur_buttons]
+
+        added_input_selectors = [s for s in cur_inputs.keys() if s not in prev_inputs]
+        removed_input_selectors = [s for s in prev_inputs.keys() if s not in cur_inputs]
+
+        added_texts = [t for t in cur_texts if t not in prev_texts]
+        removed_texts = [t for t in prev_texts if t not in cur_texts]
+
+        mudou = bool(
+            added_button_selectors
+            or removed_button_selectors
+            or added_input_selectors
+            or removed_input_selectors
+            or added_texts
+            or removed_texts
+        )
+
+        # Save current snapshot for next diff
+        _browser_last_dom_state = cur_idx
+
+        return {
+            "mudou": mudou,
+            "url": cur_idx.get("url"),
+            "title": cur_idx.get("title"),
+            "counts": cur_idx.get("counts"),
+            "novos_botoes": _limit_list([cur_buttons[s] for s in added_button_selectors], diff_limit),
+            "removidos_botoes": _limit_list([prev_buttons[s] for s in removed_button_selectors], diff_limit),
+            "novos_campos": _limit_list([cur_inputs[s] for s in added_input_selectors], diff_limit),
+            "removidos_campos": _limit_list([prev_inputs[s] for s in removed_input_selectors], diff_limit),
+            "novos_textos": _limit_list(sorted(added_texts), diff_limit),
+            "removidos_textos": _limit_list(sorted(removed_texts), diff_limit),
+        }
     
     else:
         return {"error": f"Unknown tool: {name}"}

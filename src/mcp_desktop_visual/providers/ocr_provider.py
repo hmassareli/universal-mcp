@@ -1,7 +1,7 @@
 """
 OCR Provider - Fallback using Tesseract OCR.
 
-This is the fallback provider when CDP and UIA are not available.
+This is the fallback provider when UIA is not available.
 Uses screen capture + Tesseract OCR to detect text elements.
 
 Use cases:

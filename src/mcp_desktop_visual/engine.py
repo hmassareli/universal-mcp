@@ -5,7 +5,6 @@ Coordinates screen capture, element detection, and state management
 to provide a unified visual understanding of the desktop.
 
 Uses a provider-based architecture:
-- CDP (Chrome DevTools Protocol) for Chromium-based apps (Chrome, Edge, VS Code, Electron)
 - UIA (UI Automation) for native Windows apps
 - OCR as fallback for anything else
 """
@@ -40,7 +39,6 @@ class DesktopVisualEngine:
     - Querying the visual state
     
     Uses intelligent provider selection:
-    - CDP for browsers and Electron apps (fastest, most accurate)
     - UI Automation for native Windows apps
     - OCR as fallback
     """
@@ -161,9 +159,8 @@ class DesktopVisualEngine:
         Analyze the full screen for elements.
         
         Uses intelligent provider selection:
-        1. Try CDP for Chromium-based apps (fastest, most accurate)
-        2. Try UI Automation for native Windows apps
-        3. Fall back to OCR for everything else
+        1. Try UI Automation for native Windows apps
+        2. Fall back to OCR for everything else
         """
         # Try to use intelligent providers first
         elements = self._try_smart_providers()
@@ -178,7 +175,7 @@ class DesktopVisualEngine:
     
     def _try_smart_providers(self) -> Optional[list[UIElement]]:
         """
-        Try to use CDP or UIA providers for better accuracy.
+        Try to use UIA providers for better accuracy.
         
         Returns:
             List of elements if a smart provider worked, None otherwise
@@ -204,13 +201,12 @@ class DesktopVisualEngine:
             logger.debug(f"Smart providers: process={process_name}, title={window_title[:30]}")
             
             # Find best provider for the ACTIVE window only
-            # We should only use CDP/UIA when the active window matches
+            # We should only use UIA when the active window matches
             # This ensures we capture what the user is actually looking at
             provider = registry.get_provider(process_name, window_title, window_class)
             
-            # NOTE: We intentionally do NOT fall back to CDP when another window is active
-            # The MCP should capture information from whatever window is active,
-            # not always go to Chrome just because CDP port is open
+            # NOTE: We intentionally do NOT target a specific app when another window is active.
+            # The MCP should capture information from whatever window is active.
             
             if provider is None:
                 logger.debug(f"Smart providers: No provider matched for active window '{process_name}' - will use OCR")

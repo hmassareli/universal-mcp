@@ -51,12 +51,10 @@ class ProviderRegistry:
             return
         
         # Import and register providers here to avoid circular imports
-        from .cdp import CDPProvider
         from .uia import UIAProvider
         from .ocr_provider import OCRProvider
         
         # Register in order of preference
-        self.register(CDPProvider())
         self.register(UIAProvider())
         self.register(OCRProvider())
         

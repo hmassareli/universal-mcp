@@ -135,6 +135,10 @@ class ServerConfig:
     # Maximum concurrent operations
     max_concurrent: int = 5
 
+    # Browser extension WebSocket bridge (127.0.0.1 only)
+    browser_ws_host: str = "127.0.0.1"
+    browser_ws_port: int = 8765
+
 
 @dataclass
 class Config:
